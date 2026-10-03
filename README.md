@@ -66,3 +66,30 @@ __PDF mensual visual (matplotlib)__
 6. `agendar_sync.bat` una sola vez para que la sincronizacion corra CADA dia a
    las 06:30 sin afectar la operacion.
 7. `pdf_mensual.bat` escribe el PDF del mes; tambien se descarga desde el tablero.
+
+## Historico de Facturacion Mensual (dashboard HTML)
+
+`facturacion_mensual.py` arma un historico de **2 anos** de la facturacion
+mensual, leyendo el ERP en modo **solo lectura** (mismo favorites de
+latinbien.com &gt; Ventas: *FACTURACION MENSUAL*).
+
+- Modelo: `sale.order` con `x_status_compra = 4` ("4. ENTREGA REALIZADA"),
+  fecha `commitment_date`; agrupa por mes, ejecutivo (`user_id`), origen
+  (`source_id`) y plan (`planes`).
+- Salidas: `facturacion_mensual.html` (dashboard autocontenido con barras por año,
+  grafica de tendencia mensual con ejes, KPIs, tablas y descarga CSV) y
+  `facturacion_mensual_detalle.json` (las ordenes una a una, **local y fuera de
+  Git** porque trae clientes).
+- Uso:
+  - `python facturacion_mensual.py --desde 2025-01` consulta el ERP y regenera el
+    dashboard desde ese mes (asi se saca 2024 del historico).
+  - `python facturacion_mensual.py --meses 36` otra ventana.
+  - `python facturacion_mensual.py --desde-detalle` regenera el HTML desde el
+    JSON local **sin volver a consultar el ERP**.
+- **Cuadre contable**: ademas del monto de las ordenes, el dashboard trae el neto
+  facturado (facturas de cliente **menos** notas credito, leidas de `account.move`
+  en solo lectura) y la lista de ordenes cuyo monto no cuadra, para que el total
+  se pueda auditar.
+- El HTML solo lleva agregados (sin nombres de clientes ni de ordenes), asi que
+  es seguro publicarlo en `docs/`. El mes en curso aparece marcado como
+  incompleto para no comparar un mes parcial contra uno cerrado.
