@@ -30,7 +30,7 @@ class OdooClient:
     _READ_ONLY_METHODS = {
         "search", "search_read", "read", "search_count",
         "name_get", "check_access_rights", "fields_get", "get_metadata",
-        "exists", "web_read", "web_search_read",
+        "exists", "web_read", "web_search_read", "read_group",
     }
 
     def __init__(self, url, db, user, api_key, retries=4, backoff=4):

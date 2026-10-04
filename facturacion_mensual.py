@@ -23,7 +23,7 @@ import argparse
 import json
 import unicodedata
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from odoo_client import OdooClient
@@ -47,6 +47,27 @@ def norm(texto):
 
 def mes_ini(anio, mes):
     return date(anio, mes, 1)
+
+
+# America/Caracas (UTC-4, sin horario de verano): la zona del usuario en Odoo.
+# Odoo devuelve commitment_date en UTC pero agrupa la vista en la zona horaria
+# del usuario, asi que el (anio, mes) se calcula en Caracas para calzar con
+# lo que muestra el favorito.
+TZ_OFFSET = timedelta(hours=-4)
+
+
+def mes_local(cd):
+    """(anio, mes) de commitment_date convertido de UTC a America/Caracas."""
+    if not cd:
+        return None
+    dt = datetime.fromisoformat(cd) + TZ_OFFSET
+    return dt.year, dt.month
+
+
+def clave_mes(cd):
+    """'AAAA-MM' de commitment_date en America/Caracas."""
+    k = mes_local(cd)
+    return f"{k[0]:04d}-{k[1]:02d}" if k else ""
 
 
 def rango_meses(n, hoy=None):
@@ -73,6 +94,8 @@ def _nombre_m2(m2o):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--meses", type=int, default=24, help="ventana historica en meses")
+    ap.add_argument("--hasta", default=None,
+                    help="ultimo mes inclusive, formato AAAA-MM (corta el mes en curso)")
     ap.add_argument("--desde", default=None,
                     help="corta la ventana desde este mes, p.ej. --desde 2025-01 (saca 2024)")
     ap.add_argument("--sin-detalle", action="store_true", help="no escribir el JSON de ordenes")
@@ -92,8 +115,12 @@ def main():
         facturas = det.get("facturas") or {}
         if args.desde:
             desde = args.desde.strip()
-            ordenes = [o for o in ordenes if (o.get("commitment_date") or "")[:7] >= desde]
+            ordenes = [o for o in ordenes if clave_mes(o.get("commitment_date")) >= desde]
             print(f"Recortado a {desde} en adelante.")
+        if args.hasta:
+            hasta = args.hasta.strip()
+            ordenes = [o for o in ordenes if clave_mes(o.get("commitment_date")) <= hasta]
+            print(f"Recortado hasta {hasta}.")
         print(f"Regenerando desde el detalle local ({len(ordenes)} ordenes). ERP no consultado.")
     else:
         c = OdooClient(cfg["odoo"]["url"], cfg["odoo"]["db"], cfg["odoo"]["user"],
@@ -113,20 +140,38 @@ def main():
             meses = [m for m in meses if f"{m[0]:04d}-{m[1]:02d}" >= desde]
             if not meses:
                 raise SystemExit(f"--desde {desde} deja la ventana sin meses.")
+        if args.hasta:
+            hasta = args.hasta.strip()
+            meses = [m for m in meses if f"{m[0]:04d}-{m[1]:02d}" <= hasta]
+            if not meses:
+                raise SystemExit(f"--hasta {hasta} deja la ventana sin meses.")
         print(f"Ventana: {MESES[meses[0][1]]} {meses[0][0]} -> {MESES[meses[-1][1]]} {meses[-1][0]}")
 
         # ---------- Bajada SOLO LECTURA, mes a mes ----------
-        # Dominio identico al del favorito, acotado por commitment_date.
+        # Dominio identico al del favorito: [('x_status_compra', '=', '4')].
+        # Bajamos con 1 dia de colchon por mes: commitment_date llega en UTC y
+        # en America/Caracas puede caer en el mes vecino. El recorte definitivo
+        # es por mes local (mismo criterio con el que agrupa la vista en Odoo).
         base_dom = [("x_status_compra", "=", "4")]
-        ordenes = []
-        for i, (y, m) in enumerate(meses):
+        ventana = {f"{y:04d}-{m:02d}" for (y, m) in meses}
+        vista = {}
+        for (y, m) in meses:
             d0 = mes_ini(y, m)
             d1 = mes_ini(*((y + 1, 1) if m == 12 else (y, m + 1)))
-            dom = base_dom + [("commitment_date", ">=", d0.strftime("%Y-%m-%d 00:00:00")),
-                              ("commitment_date", "<", d1.strftime("%Y-%m-%d 00:00:00"))]
-            filas = c.search_read("sale.order", dom, CAMPOS, order="commitment_date")
-            ordenes += filas
-            print(f"  {MESES[m]} {y}: {len(filas)} ordenes")
+            dom = base_dom + [
+                ("commitment_date", ">=",
+                 (d0 - timedelta(days=1)).strftime("%Y-%m-%d 00:00:00")),
+                ("commitment_date", "<",
+                 (d1 + timedelta(days=1)).strftime("%Y-%m-%d 00:00:00"))]
+            for o in c.search_read("sale.order", dom, CAMPOS, order="commitment_date"):
+                vista[o["id"]] = o
+        ordenes = [o for o in vista.values()
+                   if clave_mes(o.get("commitment_date")) in ventana]
+        por_mes = defaultdict(int)
+        for o in ordenes:
+            por_mes[clave_mes(o.get("commitment_date"))] += 1
+        for (y, m) in meses:
+            print(f"  {MESES[m]} {y}: {por_mes.get(f'{y:04d}-{m:02d}', 0)} ordenes")
 
         # ---------- Facturas vinculadas (contabilidad), SOLO LECTURA ----------
         # Para poder cuadrar el monto de las ordenes contra las facturas reales.
@@ -143,7 +188,7 @@ def main():
         "generado": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "erp": f"{cfg['odoo']['url']} (db {cfg['odoo']['db']})",
         "origen": "Venta > Favoritos > FACTURACION MENSUAL  |  sale.order con "
-                  "x_status_compra = 4 (4. ENTREGA REALIZADA)  |  fecha: commitment_date",
+                  "x_status_compra=4 (ENTREGA REALIZADA)  | fecha: commitment_date",
         "ventana": ventana,
         "equipo": equipo,
         "filas": filas,
@@ -188,7 +233,7 @@ def descuadres(ordenes, facturas):
         neto = sum(importe_firmado(facturas[i]) for i in ids)
         monto = float(o.get("amount_total") or 0)
         if abs(neto - monto) > 0.01:
-            out.append({"n": o.get("name") or "", "m": (o.get("commitment_date") or "")[:7],
+            out.append({"n": o.get("name") or "", "m": clave_mes(o.get("commitment_date")),
                         "o": round(monto, 2), "f": round(neto, 2),
                         "d": round(neto - monto, 2)})
     out.sort(key=lambda r: -abs(r["d"]))
@@ -232,9 +277,9 @@ def agregar(ordenes, planes_sel, facturas=None):
         cd = o.get("commitment_date")
         if not cd:
             continue
-        dt = datetime.fromisoformat(cd)
+        kmes = clave_mes(cd)
         clave = (
-            f"{dt.year:04d}-{dt.month:02d}",
+            kmes,
             (_nombre_m2(o.get("user_id")) or "SIN ASESOR").strip(),
             (_nombre_m2(o.get("source_id")) or "SIN ORIGEN").strip(),
             planes_sel.get(o.get("planes"), o.get("planes") or "SIN PLAN") or "SIN PLAN",
@@ -911,3 +956,4 @@ render();
 
 if __name__ == "__main__":
     main()
+
