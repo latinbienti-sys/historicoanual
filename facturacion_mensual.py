@@ -186,9 +186,6 @@ def main():
                f"{MESES[int(mms[-1]['m'][5:7])]} {mms[-1]['m'][:4]}") if mms else "sin datos"
     payload = {
         "generado": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "erp": f"{cfg['odoo']['url']} (db {cfg['odoo']['db']})",
-        "origen": "Venta > Favoritos > FACTURACION MENSUAL  |  sale.order con "
-                  "x_status_compra=4 (ENTREGA REALIZADA)  | fecha: commitment_date",
         "ventana": ventana,
         "equipo": equipo,
         "filas": filas,
@@ -917,8 +914,7 @@ function render(){
   tDim(rows,"o","p-origen","Origen (source_id)");
   tDim(rows,"p","p-plan","Plan (planes)");
   tInter(rows);
-  el("sub").innerHTML = "Ventana: "+esc(DATA.ventana)+" &nbsp;|&nbsp; Origen: "+esc(DATA.origen)
-    + "<br>Consultado el "+esc(DATA.generado)+" desde "+esc(DATA.erp)+" en modo solo lectura.";
+  el("sub").innerHTML = "Ventana: "+esc(DATA.ventana);
 }
 function csv(){
   const rows = filtrar();
